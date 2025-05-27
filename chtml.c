@@ -66,6 +66,7 @@ void parse_value(state_t* state) {
 		case C_QUOT:
 			/* Look for matching apostrophe/quotation mark */
 			state->c++;
+			state->ctx.value = state->c;
 
 			for (;;) {
 				class_t next = peek(state);
@@ -224,16 +225,20 @@ void parse_html(const char* html, chtml_callback_t cb) {
 void cb(chtml_event_t event, const char* str, size_t size, const chtml_context_t* ctx) {
 	switch (event) {
 		case CHTML_EVENT_TAG_ENTER:
-			if (size > 2 && str[1] != '/') {
+			if (ctx->tag_size >= 1 && ctx->tag[0] != '/') {
 				printf("Enter:\t");
-				fwrite(str + 1, 1, size - 1, stdout);
+				fwrite(ctx->tag, 1, ctx->tag_size, stdout);
 				puts("");
 			}
 			break;
 
 		case CHTML_EVENT_ATTRIBUTE:
 			printf("Attr:\t\t");
-			fwrite(str, 1, size, stdout);
+			fwrite(ctx->attribute, 1, ctx->attribute_size, stdout);
+			if (ctx->value) {
+				printf(" = ");
+				fwrite(ctx->value, 1, ctx->value_size, stdout);
+			}
 			puts("");
 			break;
 	}
