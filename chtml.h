@@ -1,14 +1,25 @@
-/* Note: There is no callback for text, comment, etc. nodes because I haven't needed them yet */
+/* Note: a "tag" in the context of this library means "<...>", so "entering" a
+ * tag means "<" and exiting a tag means ">". Most importantly, closing tags
+ * are not distinguished by this library, so they are represented by entering a
+ * tag like "/table" (note the "/") and then immediately exiting it. */
 
-typedef void (*start_tag_callback_t)(const char* tag, size_t size);
-typedef void (*attribute_callback_t)(const char* attribute, size_t attribute_size, const char* value, size_t value_size);
-/*typedef void (*exit_tag_callback_t)(const char* tag, size_t size);*/
+typedef enum {
+	CHTML_EVENT_OTHER = 1,
+	CHTML_EVENT_TAG_ENTER,
+	CHTML_EVENT_TAG_EXIT,
+	CHTML_EVENT_ATTRIBUTE,
+} chtml_event_t;
 
 typedef struct {
-	start_tag_callback_t start_tag;
-	attribute_callback_t attribute;
-	/*exit_tag_callback_t exit_tag;*/
-} chtml_callbacks_t;
+	const char* tag;
+	size_t tag_size;
+	const char* attribute;
+	size_t attribute_size;
+	const char* value;
+	size_t value_size;
+} chtml_context_t;
 
-extern void parse_html(const char* html, chtml_callbacks_t callbacks);
+typedef void (*chtml_callback_t)(chtml_event_t event, const char* str, size_t size, const chtml_context_t* ctx);
+
+extern void parse_html(const char* html, chtml_callback_t cb);
 

@@ -2,17 +2,18 @@
 #include "chtml.h"
 
 /* Character classifier */
-#define C_SPACE		1
-#define C_BROPEN	2
-#define C_BRCLOSE	3
-#define C_EQUAL		4
-#define C_APOS		5
-#define C_QUOT		6
-#define C_SLASH		7
-#define C_NULL		8
-#define C_OTHER		9
+typedef enum {
+	C_SPACE = 1,
+	C_BROPEN,
+	C_BRCLOSE,
+	C_EQUAL,
+	C_APOS,
+	C_QUOT,
+	C_NULL,
+	C_TEXT,
+} class_t;
 
-int classify_character(char c) {
+class_t classify_character(char c) {
 	switch (c) {
 		case ' ':
 		case '\t':
@@ -26,197 +27,216 @@ int classify_character(char c) {
 		case '=': return C_EQUAL; break;
 		case '\'': return C_APOS; break;
 		case '"': return C_QUOT; break;
-		case '/': return C_SLASH; break;
 		case '\0': return C_NULL; break;
 
-		default: return C_OTHER; break;
+		default: return C_TEXT; break;
 	}
 }
 
-/* Tokenizer */
-#define T_NONE		0
-#define T_SPACE		1
-#define T_BROPEN	2
-#define T_BRCLOSE	3
-#define T_EQUAL		4
-#define T_APOS		5
-#define T_QUOT		6
-#define T_TEXT		7
+/* Parser */
+typedef struct {
+	chtml_callback_t cb;
+	chtml_context_t ctx;
+	const char* start;
+	const char* c;
+} state_t;
 
-int get_next_token(const char** c, size_t* size) {
-	int type = T_NONE;
-	size_t l = 1;
-
-	switch (classify_character(**c)) {
-		case C_SPACE:
-			/* Coalesce spaces */
-			type = T_SPACE;
-			while (classify_character(*((*c) + l)) == C_SPACE) {
-				l++;
-			}
-			break;
-
-		case C_BROPEN: type = T_BROPEN; break;
-		case C_BRCLOSE: type = T_BRCLOSE; break;
-		case C_EQUAL: type = T_EQUAL; break;
-		case C_APOS: type = T_APOS; break;
-		case C_QUOT: type = T_QUOT; break;
-
-		case C_SLASH:
-		case C_OTHER:
-			/* Coalesce */
-			type = T_TEXT;
-			while (classify_character(*((*c) + l)) == C_OTHER) {
-				l++;
-			}
-			break;
-
-		case C_NULL:
-			l = 0;
-			break;
-	}
-
-	*size = l;
-	*c = (*c) + l;
-	return type;
+class_t peek(state_t* state) {
+	return classify_character(*state->c);
 }
 
-void parse_value(const char** c, int end_type, const char** value, size_t* value_size) {
-	int type = T_NONE;
-	size_t size = 0;
-
-	*value = *c;
-	*value_size = 0;
-
-	while ((type = get_next_token(c, &size)) != end_type) {
-		if (type == T_NONE) {
-			/* TODO: Error */
-			return;
-		}
-
-		*value_size += size;
+void coalesce(class_t prev, state_t* state) {
+	while (peek(state) == prev) {
+		state->c++;
 	}
 }
 
-int parse_attribute(const char** c, const char** value, size_t* value_size) {
-	const char* prev = *c;
-	size_t size = 0;
-	int type = get_next_token(c, &size);
-
-	switch (type) {
-		case T_SPACE:
-		case T_BRCLOSE:
-		case T_NONE:
-			/* No equal sign */
-			*value = NULL;
-			*value_size = 0;
-			return type == T_BRCLOSE;
-
-		case T_EQUAL:
-			/* Three cases: no quotation, apostrophes, or quotation marks */
-			*value = *c;
-			type = get_next_token(c, &size);
-			switch (type) {
-				case T_TEXT:
-					*value_size = size;
-					break;
-
-				case T_QUOT:
-				case T_APOS:
-					parse_value(c, type, value, value_size);
-					break;
-			}
-			break;
-
-		/* TODO: Errors */
+void flush(chtml_event_t event, state_t* state) {
+	if (state->c > state->start) {
+		state->cb(event, state->start, (size_t)(state->c - state->start), &state->ctx);
+		state->start = state->c;
 	}
-
-	return 0;
 }
 
-void parse_tag(const char** c, chtml_callbacks_t callbacks) {
-	const char* tag = *c;
-	size_t size = 0;
+void parse_value(state_t* state) {
+	/* Three cases: no quotation, apostrophes, or quotation marks */
+	class_t start = peek(state);
+	switch (start) {
+		case C_APOS:
+		case C_QUOT:
+			/* Look for matching apostrophe/quotation mark */
+			state->c++;
 
-	if (get_next_token(c, &size) == T_TEXT) {
-		if (classify_character(*tag) == C_SLASH) {
-			/* Closing tag */
-			return;
-		}
-
-		callbacks.start_tag(tag, size);
-
-		for (;;) {
-			const char* attribute = *c;
-			int type = get_next_token(c, &size);
-			
-			switch (type) {
-				case T_NONE:
-				case T_BRCLOSE:
-					return;
-
-				case T_SPACE:
-					attribute = *c;
-					break;
-
-				case T_TEXT:
-					if (classify_character(*attribute) != C_SLASH) {
-						const char* value = NULL;
-						size_t value_size = 0;
-						int closed = parse_attribute(c, &value, &value_size);
-
-						callbacks.attribute(attribute, size, value, value_size);
-
-						if (closed) {
+			for (;;) {
+				class_t next = peek(state);
+				switch (next) {
+					case C_APOS:
+					case C_QUOT:
+						if (next == start) {
+							state->ctx.value_size = (size_t)(state->c - state->ctx.value);
+							state->c++;
+							flush(CHTML_EVENT_ATTRIBUTE, state);
 							return;
 						}
-					}
-					break;
+						else {
+							state->c++;
+						}
+						break;
 
-				/* TODO: Errors! */
+					case C_SPACE:
+					case C_EQUAL:
+					case C_TEXT:
+						state->c++;
+						break;
+
+					default:
+						/* TODO: Errors: BROPEN, BRCLOSE, NULL */
+						return;
+				}
 			}
+			break;
+
+		case C_TEXT:
+			/* No quotation */
+			state->ctx.value = state->c;
+			coalesce(C_TEXT, state);
+			state->ctx.value_size = (size_t)(state->c - state->ctx.value);
+			flush(CHTML_EVENT_ATTRIBUTE, state);
+			return;
+
+		default:
+			/* TODO: Errors: SPACE, BROPEN, BRCLOSE, EQUAL, NULL */
+			return;
+	}
+}
+
+void parse_attribute(state_t *state) {
+	switch (peek(state)) {
+		case C_SPACE:
+		case C_BRCLOSE:
+			/* No equal sign */
+			state->ctx.value = NULL;
+			state->ctx.value_size = 0;
+			flush(CHTML_EVENT_ATTRIBUTE, state);
+			break;
+
+		case C_EQUAL:
+			state->c++;
+			parse_value(state);
+			break;
+
+		default:
+			/* TODO: Error: BROPEN, NULL, APOS, QUOT */
+			return;
+	}
+}
+
+void parse_tag(state_t* state) {
+	state->c++;
+	state->ctx.tag = state->c;
+	state->ctx.tag_size = 0;
+	state->ctx.attribute = NULL;
+	state->ctx.attribute_size = 0;
+	state->ctx.value = NULL;
+	state->ctx.value_size = 0;
+
+	coalesce(C_TEXT, state);
+	state->ctx.tag_size = (size_t)(state->c - state->ctx.tag);
+	flush(CHTML_EVENT_TAG_ENTER, state);
+
+	for (;;) {
+		coalesce(C_SPACE, state);
+
+		switch (peek(state)) {
+			case C_BRCLOSE:
+				state->ctx.attribute = NULL;
+				state->ctx.attribute_size = 0;
+				state->ctx.value = NULL;
+				state->ctx.value_size = 0;
+				flush(CHTML_EVENT_OTHER, state);
+
+				state->c++;
+				flush(CHTML_EVENT_TAG_EXIT, state);
+				return;
+
+			case C_NULL:
+				return;
+
+			case C_TEXT:
+				flush(CHTML_EVENT_OTHER, state);
+				state->ctx.attribute = state->c;
+				coalesce(C_TEXT, state);
+				state->ctx.attribute_size = (size_t)(state->c - state->ctx.attribute);
+
+				/* Check for XML-style self-closing tag */
+				if (state->ctx.attribute_size == 1 && state->ctx.attribute[0] == '/') {
+					state->ctx.attribute = NULL;
+					state->ctx.attribute_size = 0;
+					flush(CHTML_EVENT_OTHER, state);
+				}
+				else {
+					parse_attribute(state);
+				}
+				break;
+
+			default:
+				/* TODO: Errors: BROPEN, EQUAL, APOS, QUOT */
+				return;
 		}
 	}
 }
 
-void parse_html(const char* html, chtml_callbacks_t callbacks) {
-	int type = T_NONE;
-	size_t size = 0;
+void parse_html(const char* html, chtml_callback_t cb) {
+	state_t state = {
+		cb,
+		{
+			NULL, 0,
+			NULL, 0,
+			NULL, 0
+		},
+		html,
+		html
+	};
 
-	while ((type = get_next_token(&html, &size)) != T_NONE) {
-		switch (type) {
-			case T_BROPEN:
-				parse_tag(&html, callbacks);
+	class_t next = C_NULL;
+	
+	while ((next = peek(&state)) != C_NULL) {
+		switch (next) {
+			case C_BROPEN:
+				flush(CHTML_EVENT_OTHER, &state);
+				parse_tag(&state);
 				break;
 
-			default: break;
+			default:
+				state.c++;
+				break;
 		}
 	}
+
+	flush(CHTML_EVENT_OTHER, &state);
 }
 
 /* TODO: Remove! */
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
-#include <errno.h>
 
-void start(const char* tag, size_t size) {
-	printf("Enter:\t");
-	fwrite(tag, 1, size, stdout);
-	puts("");
-}
+void cb(chtml_event_t event, const char* str, size_t size, const chtml_context_t* ctx) {
+	switch (event) {
+		case CHTML_EVENT_TAG_ENTER:
+			if (size > 2 && str[1] != '/') {
+				printf("Enter:\t");
+				fwrite(str + 1, 1, size - 1, stdout);
+				puts("");
+			}
+			break;
 
-void attr(const char* attribute, size_t attribute_size, const char* value, size_t value_size) {
-	printf("\tAttr:\t");
-	fwrite(attribute, 1, attribute_size, stdout);
-	printf("=");
-	if (value) {
-		fwrite(value, 1, value_size, stdout);
+		case CHTML_EVENT_ATTRIBUTE:
+			printf("Attr:\t\t");
+			fwrite(str, 1, size, stdout);
+			puts("");
+			break;
 	}
-	else {
-		printf("(null)");
-	}
-	puts("");
 }
 
 int main(int argc, const char** argv) {
@@ -224,7 +244,7 @@ int main(int argc, const char** argv) {
 	size_t length = 0;
 	char* str = NULL;
 	if (f) {
-		if (fseek(f, 0, SEEK_END) != 0) printf("Error! %d", errno);
+		fseek(f, 0, SEEK_END);
 		length = ftell(f);
 		str = malloc(length + 1);
 		if (str) {
@@ -233,38 +253,7 @@ int main(int argc, const char** argv) {
 			fread(str, 1, length, f);
 
 			{
-				chtml_callbacks_t callbacks = { &start, &attr };
-				parse_html(str, callbacks);
-
-/*				char* c = str;
-				char* prev = c;
-				int type = 0;
-				size_t length = 0;
-				while (1) {
-					prev = c;
-					type = get_next_token(&c, &length);
-					switch (type) {
-						case T_NONE: printf("NONE"); break;
-						case T_SPACE: printf("SPACE:\t"); break;
-						case T_TEXT: printf("TEXT:\t"); break;
-						case T_BROPEN: printf("BROPEN:\t"); break;
-						case T_BRCLOSE: printf("BRCLOSE:\t"); break;
-						case T_EQUAL: printf("EQUAL:\t"); break;
-						case T_APOS: printf("APOS:\t"); break;
-						case T_QUOT: printf("QUOT:\t"); break;
-						default:
-							printf("*** dunno");
-							break;
-					}
-					if (type == T_SPACE) {
-						printf("%lu", (size_t)(c - prev));
-					}
-					else {
-						fwrite(prev, 1, (size_t)(c - prev), stdout);
-						printf("\n");
-					}
-					if (!type) break;
-				}*/
+				parse_html(str, &cb);
 			}
 		}
 	}
