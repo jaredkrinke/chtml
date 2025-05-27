@@ -6,14 +6,13 @@ void cb(chtml_event_t event, const char* str, size_t size, const chtml_context_t
 	switch (event) {
 		case CHTML_EVENT_TAG_ENTER:
 			if (ctx->tag_size >= 1 && ctx->tag[0] != '/') {
-				printf("Enter:\t");
 				fwrite(ctx->tag, 1, ctx->tag_size, stdout);
 				puts("");
 			}
 			break;
 
 		case CHTML_EVENT_ATTRIBUTE:
-			printf("Attr:\t\t");
+			printf("\t");
 			fwrite(ctx->attribute, 1, ctx->attribute_size, stdout);
 			if (ctx->value) {
 				printf(" = ");
