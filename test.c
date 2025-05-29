@@ -37,7 +37,7 @@ int main(int argc, const char** argv) {
 			fread(str, 1, length, f);
 
 			{
-				parse_html(str, &cb);
+				parse_html(str, &cb, NULL);
 			}
 		}
 	}

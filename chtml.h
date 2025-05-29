@@ -11,6 +11,7 @@ typedef enum {
 } chtml_event_t;
 
 typedef struct {
+	void* user_data;
 	const char* tag;
 	size_t tag_size;
 	const char* attribute;
@@ -21,5 +22,5 @@ typedef struct {
 
 typedef void (*chtml_callback_t)(chtml_event_t event, const char* str, size_t size, const chtml_context_t* ctx);
 
-extern void parse_html(const char* html, chtml_callback_t cb);
+extern void parse_html(const char* html, chtml_callback_t cb, void* user_data);
 

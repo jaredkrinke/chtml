@@ -187,10 +187,11 @@ void parse_tag(state_t* state) {
 	}
 }
 
-void parse_html(const char* html, chtml_callback_t cb) {
+void parse_html(const char* html, chtml_callback_t cb, void* user_data) {
 	state_t state = {
 		cb,
 		{
+			user_data,
 			NULL, 0,
 			NULL, 0,
 			NULL, 0
